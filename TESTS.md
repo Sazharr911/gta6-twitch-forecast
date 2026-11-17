@@ -166,7 +166,7 @@ target-like set improve (0.231 vs 0.258 and 0.226 vs 0.229); the worst
 single target-like regression is +0.072 on one launch. The gain is a
 broad small improvement, not one lucky launch.
 
-## Forecaster v5 (this entry)
+## Forecaster v5 (previous version)
 
 Three changes from v4, each adopted only where the same LOO harness
 showed it helping; the experiment log, kept and rejected, is below.
@@ -229,6 +229,107 @@ improve (−0.0133 and −0.0059 against v4's per-half means), and the
 worst single target-like regression is +0.047. As with v4, a broad
 small improvement rather than one lucky launch.
 
+## Forecaster v6 (this entry)
+
+Four changes from v5, each adopted only where the same LOO harness
+showed it helping; the experiment log, kept and rejected, is below.
+Unless noted, v6-round numbers are quoted at the raised output cap
+(log-ratio cap 4.5, see the first item), where the v5 configuration
+itself scores 0.2190 / 0.2179 / 0.4156.
+
+- **The log-ratio output cap is raised, 3.5 → 4.5.** A diagnostic pass
+  over v5's failures showed the full set's loss concentrated in six
+  launches (Silksong, Wukong, Battlefield 6, Marathon, Baldur's Gate 3,
+  Kingdom Come II, ARC Raiders, Helldivers 2 — losses 1.4–2.0 each)
+  whose hour-1 print precedes the real unlock by hours and whose true
+  log-ratio curve peaks at +4.5 to +7.7. The 3.5 cap truncated even
+  their *median* forecast (Silksong at hour 16: truth +7.66, forecast
+  pinned at +3.50). Raising the cap to 4.5 costs the target-like and
+  tight sets exactly nothing — no forecast in that regime comes within
+  a log of the cap — and cuts the full set from 0.4880 to 0.4156
+  (5.5 → 0.3765, 7.0 → 0.3610; 4.5 is kept as the insured middle: the
+  1e9 viewer cap still guards the contract, and a runaway
+  extrapolation stays bounded). This is the removal of a self-inflicted
+  truncation, not a fit change.
+- **The unlock class modulates the kernel bandwidth.** v5 removed the
+  class from the weights entirely (the v3/v4 multiplicative factor
+  double-counted the regression's class features). v6 returns it in a
+  different place: the size kernel's bandwidth is ×0.7 for a comparable
+  of the target's own class and ×1.2 for a different known class
+  (unmodulated when either is unknown). Same-class matching sharpens
+  without the factor's hard down-weighting of the rest of the pool.
+  The surface is monotone in the narrowing (same-class multiplier
+  0.85 → 0.2168, 0.8 → 0.2161, 0.75 → 0.2143, 0.7 → 0.2137 target-like,
+  in the stacked configuration), not a spike.
+- **A sixth regression feature: log viewers-per-channel at hour 1**
+  (`ln(p1 / channels_1)`, from the comparable's hourly rows and the
+  case's `known` print). As a v2-era *kernel* feature, viewers-per-
+  channel was rejected; as a ridge feature on the v6 stack it earns
+  its place (it is the only single feature that improved target-like
+  on the class-bandwidth base). Where channels are unreported the
+  feature is None and centres out, exactly like `pre`/`dip`.
+- **The readout averages two scale models.** The pool's log-ratio
+  residuals around the fitted location are strongly right-skewed
+  (upside RMS 1.5–3× the downside at every hour; skew +0.8 to +2.5),
+  so the ridge now also returns split residual scales (up-residuals,
+  down-residuals, dof-corrected). A fully asymmetric readout on its
+  own trades target-like away for tight (0.2205 / 0.2156 on the v5
+  base); the shipped readout averages the symmetric and asymmetric
+  log quantiles 50/50, each with its own self-LOO corrections — the
+  half-dose keeps the tight gain and refunds the target-like cost.
+  The weight floor also drops 0.005 → 0.002 in the final stack (a
+  broad, small win on all three sets once the bandwidth modulation
+  is in: 0.2136 / 0.2125 / 0.4176 vs 0.2143 / 0.2127 / 0.4187 at the
+  0.75 setting).
+
+Experiment log (target-like / tight / full LOO; v5 base 0.219 / 0.218 /
+0.488 at its shipped cap, 0.219 / 0.218 / 0.416 at cap 4.5). **Kept**:
+the cap raise (above); class-bandwidth modulation (0.85/1.2 on the v5
+features: 0.2168 / 0.2144 / 0.4189; 0.8/1.2: 0.2161 / 0.2141 / 0.4189);
+viewers-per-channel (alone on the v5 weights: 0.2178 / 0.2187 /
+0.4148; on the class-bandwidth base: 0.2148 / 0.2148 / 0.4181); the
+symmetric/asymmetric readout average (on the final fit: tight
+0.2150 → 0.2126 against the symmetric readout alone, target-like
+unchanged within 0.001); the floor drop (above). **Rejected**: the
+fully asymmetric readout and its outer-levels-only variant (target-
+like cost +0.002 to +0.003 at every setting); isotonic enforcement of
+the corrections across levels (0.2191 / 0.2182 / 0.4879 — neutral);
+shrinking the location's deviation from the pool mean at late or
+early hours (worse on target-like at every strength); Huber-robust
+ridge, one reweighting iteration (κ = 1.5: 0.2228 / 0.2229; κ = 2.5:
+0.2214 / 0.2213 — the pool's wild curves are information about the
+full set's targets, not contamination); per-hour λ ramps in both
+directions (neutral, ±0.0003); the plain bandwidth and λ grids on the
+v5 base (bw 0.8: 0.2188 / 0.2216; bw 1.1: 0.2197 / 0.2171; λ 12:
+0.2204 / 0.2165; λ 30: 0.2190 / 0.2194 — the v5 plateau is real);
+new features — a simultaneous-unlock indicator (0.2193 / 0.2182),
+simultaneous + early-access indicators (0.2197 / 0.2189), size × pre
+(0.2352 / 0.2227 / 0.4370 — the interaction destabilises the large-
+launch extrapolation, as size² did), rolling × pre (0.2206), the
+pre-day slope (0.2199 / 0.2179 / 0.4144), a weekend indicator
+(0.2192 / 0.2180), launch era/year (0.2266 / 0.2335), and the unlock
+hour parsed from the notes (0.2246 / 0.2245 — the per-hour fits
+cannot use a level feature to express a rise-then-fall, and the
+class-bandwidth kernel captures the same grouping better); a lite
+class factor (×1.5 / ×0.7) stacked on the bandwidth modulation
+(0.2181 / 0.2203 — the factor hurts again, confirming v5's removal);
+retuning the bias/recalibration shrinks on the new base (every probe
+within ±0.0006 — the v5 constants ship unchanged, per the v5
+split-half lesson); averaging *across different fits* (v5-fit +
+class-bandwidth fit: 0.2172 / 0.2155 — worse than averaging the two
+readouts of the one better fit); widening-only class bandwidth
+(1.0 / 1.3: target-like 0.2195 — the gain is in the narrowing).
+
+Stability of the shipped configuration against v5, per launch
+(measured through the shipped programs themselves): it wins 15 of 24
+target-like launches; both halves of the target-like set improve
+(0.2073 vs 0.2177 and 0.2187 vs 0.2204), as do the even/odd halves
+(0.1913 vs 0.1987 and 0.2347 vs 0.2394); no split of any set loses.
+The worst single target-like regression is +0.025 (DOOM: The Dark
+Ages). The gain over v5 is −2.7% target-like, −2.4% tight, −14.4%
+full — again a broad small improvement plus the un-truncation, not
+one lucky launch.
+
 ## Results (mean pinball loss on the log scale, lower is better)
 
 | forecaster | target-like | tight | full |
@@ -238,7 +339,8 @@ small improvement rather than one lucky launch.
 | v2: kernel-weighted quantiles (pre, dip, ln p1) | 0.282 | 0.275 | 0.611 |
 | v3: size×class kernel, location–scale, pool bias | 0.243 | 0.250 | 0.507 |
 | v4: ridge location (size, pre, dip, rolling), per-level recal, trend | 0.229 | 0.234 | 0.495 |
-| **v5: + size×rolling interaction, λ 20, class weight factor removed** | **0.219** | **0.218** | **0.488** |
+| v5: + size×rolling interaction, λ 20, class weight factor removed | 0.219 | 0.218 | 0.488 |
+| **v6: + class-bandwidth kernel, viewers-per-channel, sym/asym readout average, cap 4.5** | **0.213** | **0.213** | **0.418** |
 
 For reference, the house baseline's loss on the actual practice set, as
 published in the kit's `competition.yaml`, is 0.387 — in line with its
@@ -247,8 +349,8 @@ model forecast's practice loss is not published in the kit. On the server,
 v2's practice loss was 0.2379 against a 0.282 target-like LOO estimate —
 the four practice launches sit at the predictable end of the target-like
 regime, so v5's expected practice score is likewise somewhat better than
-0.219; the number that decides prizes is the final's, which no local
-measurement can reach.
+0.219, and v6's better than 0.213; the number that decides prizes is the
+final's, which no local measurement can reach.
 
 Reproduce with `python3 calibrate.py <kit input dir>` (reads the practice
 cases' comparables from the kit's `input/`).
@@ -262,8 +364,8 @@ cases' comparables from the kit's `input/`).
 - Determinism: two runs on the same inputs produce byte-identical output,
   including under the grader's invocation (`python3 -P -s`,
   `PYTHONHASHSEED=0`).
-- Runtime: ~1.2 s per case locally including the pool self-LOO bias and
-  recalibration (cap is 8 s).
+- Runtime: ~1.0 s per case locally including the pool self-LOO bias and
+  recalibration for both of v6's scale models (cap is 8 s).
 - Fallbacks exercised: a case stripped of comparables falls back to the
   persistence forecast and stays valid; a pool of 5 comparables
   (corrections skipped) stays valid; a case with a missing hour-1 print

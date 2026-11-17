@@ -23,25 +23,31 @@ location–scale readout of those curves, re-anchored on the case's own hour-1
 print: `q_tau(h) = p1 · exp(loc[h] + corr[h][tau] + z_tau · 0.7 · sd[h])`.
 
 The location is a per-hour **weighted ridge regression** of the pool's
-log-ratios on five features visible at the checkpoint — launch size
+log-ratios on six features visible at the checkpoint — launch size
 (`ln(hour-1 viewers)`), the pre-day audience level, the hour-1 dip ratio,
-a rolling-unlock indicator, and the size × rolling interaction (λ = 20).
+a rolling-unlock indicator, the size × rolling interaction, and log
+viewers-per-channel at hour 1 (λ = 20).
 A regression extrapolates the size trend instead of saturating at the
 pool's edge, which is where a launch of GTA VI's size sits; the fitted
 location is clamped to ±1.25 log of the plain weighted mean so an
 out-of-range case can never be extrapolated further. The scale is the
-regression's weighted residual standard deviation.
+regression's weighted residual standard deviation; the shipped readout
+averages the symmetric scale model with an asymmetric one (upper
+quantiles spread by the fit's upward residuals, lower by the downward),
+because the pool's residuals are strongly right-skewed.
 
 A comparable's weight in the fit is a Gaussian kernel on
 `ln(hour-1 viewers)` (big launches trace different days than small ones),
 with a small weight floor so nothing is ever fully excluded. The unlock
 class — rolling midnight-local, simultaneous, or early-access staggered,
 read from each comparable's `unlock` note and the case's own `notes` —
-enters through the regression's rolling features rather than the weights:
-an earlier version also multiplied the weights by a class factor, and
-leave-one-out evidence showed the factor double-counts the class once the
-interaction is a feature (see `TESTS.md`). GTA VI is a rolling
-midnight-local console launch.
+enters through the regression's rolling features and, since v6, through
+the kernel's bandwidth (narrower for a comparable of the case's own
+class, wider for a different one): an earlier version instead multiplied
+the weights by a class factor, and leave-one-out evidence showed the
+factor double-counts the class once the interaction is a feature, while
+the bandwidth modulation measurably helps (see `TESTS.md`). GTA VI is a
+rolling midnight-local console launch.
 
 `corr[h][tau]` recalibrates the model against itself: at run time the pool
 forecasts itself leave-one-out, and two corrections are read off the
@@ -56,8 +62,8 @@ the program falls back to a persistence forecast (hour 1 held flat with a
 widening log-normal spread), so the output is always valid.
 
 The method was calibrated by leave-one-out cross-validation over the
-comparable launches themselves (target-like loss 0.219 vs the house
-baseline's 0.369, the previous version's 0.229, and the first version's
+comparable launches themselves (target-like loss 0.213 vs the house
+baseline's 0.369, the previous version's 0.219, and the first version's
 0.282); see `TESTS.md` — including why the practice leaderboard's near-zero
 top scores are replays of public historical data rather than forecasts, and
 why they cannot transfer to the final — and `calibrate.py`.
@@ -69,7 +75,7 @@ mkdir -p out
 MAKEFUN_INPUT_DIR=<dir with <id>.in> MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
-Deterministic, offline, no model calls; a case takes well under a second.
+Deterministic, offline, no model calls; a case takes about a second.
 
 ## License
 

@@ -6,35 +6,47 @@ directory and writes <id>.out to the output directory: {"hours": [{"hour": h,
 library only, offline, deterministic. Scoring is pinball loss on the log
 scale, so the program forecasts quantiles of ln(viewers).
 
-Method v5 (calibrated by leave-one-out cross-validation over the comparables;
+Method v6 (calibrated by leave-one-out cross-validation over the comparables;
 see TESTS.md and calibrate.py):
 
   The intraday shape of a launch is the transferable object. For every past
   launch in the case's `comparables`, form the log-ratio curve
   lr[h] = ln(viewers_h / viewers_1) over its release day. A comparable's
-  weight for a new case comes from launch size alone: a Gaussian kernel on
-  ln(hour-1 viewers) (bandwidth 1.0, weight floor 0.005) - big launches
-  trace different days than small ones, and nothing is ever fully excluded.
+  weight for a new case comes from launch size: a Gaussian kernel on
+  ln(hour-1 viewers) (bandwidth 1.0, weight floor 0.002) - big launches
+  trace different days than small ones, and nothing is ever fully
+  excluded. Since v6 the kernel's bandwidth is modulated by the
+  unlock-class relation between the case and the comparable: x0.7 for a
+  comparable of the case's own class, x1.2 for a different known class.
 
   The readout's location is no longer a weighted average of the pool's
-  curves (v3): per hour, a weighted ridge regression of lr[h] on five
+  curves (v3): per hour, a weighted ridge regression of lr[h] on six
   checkpoint-visible features - launch size (ln hour-1 viewers), the pre-day
   audience level `pre`, the hour-1 dip ratio `dip`, a rolling-unlock
-  indicator, and the size x rolling interaction - with the size-kernel
-  weights above and lambda 20. The unlock class (rolling midnight-local,
-  simultaneous, early-access staggered, unknown) is read from each
-  comparable's `unlock` note and the case's own `notes`; GTA VI is a
-  rolling midnight-local console launch, and if a case's notes do not say
-  so, its twitch id does. v3/v4 also multiplied the weights by a class
-  factor (same class x3, different x0.4); v5 drops that - once the
-  interaction is a regression feature, the factor only double-counts the
-  class and thins the pool (LOO evidence in TESTS.md). A regression
-  extrapolates the size trend instead of saturating at the pool's edge,
-  which is where a launch of GTA VI's size sits. The fitted location is
-  clamped to +/-1.25 log of the plain weighted mean, so an out-of-range
-  target can never be extrapolated further than that. The scale is the
-  regression's weighted residual sd (degrees-of-freedom corrected), and
-  quantiles are q_tau = p1 * exp(loc + corr[h][tau] + z_tau * 0.7 * sd).
+  indicator, the size x rolling interaction, and log viewers-per-channel
+  at hour 1 - with the size-kernel weights above and lambda 20. The unlock
+  class (rolling midnight-local, simultaneous, early-access staggered,
+  unknown) is read from each comparable's `unlock` note and the case's own
+  `notes`; GTA VI is a rolling midnight-local console launch, and if a
+  case's notes do not say so, its twitch id does. v3/v4 also multiplied
+  the weights by a class factor (same class x3, different x0.4); v5
+  dropped that - once the interaction is a regression feature, the factor
+  only double-counts the class and thins the pool (LOO evidence in
+  TESTS.md) - and v6's bandwidth modulation, which sharpens same-class
+  matching without hard down-weighting, is a different mechanism that
+  the same harness does reward. A regression extrapolates the size trend
+  instead of saturating at the pool's edge, which is where a launch of
+  GTA VI's size sits. The fitted location is clamped to +/-1.25 log of
+  the plain weighted mean, so an out-of-range target can never be
+  extrapolated further than that. The scale is the regression's weighted
+  residual sd (degrees-of-freedom corrected). The readout averages two
+  scale models of the same fit in log space: the symmetric one,
+  q_tau = p1 * exp(loc + corr + z_tau * 0.7 * sd), and an asymmetric one
+  whose upper quantiles are spread by the fit's upward-residual scale
+  and its lower quantiles by the downward-residual scale - the pool's
+  log-ratio residuals are strongly right-skewed (upside RMS 1.5-3x the
+  downside at every hour), and a half-strength dose of that asymmetry,
+  no more, is what the harness supports.
 
   corr[h][tau] recalibrates the model against itself, from the case's own
   comparables at run time (skipped for pools under 8): the pool forecasts
@@ -42,7 +54,8 @@ see TESTS.md and calibrate.py):
   0.4 x the per-hour median location residual (3-hour smoothed, the v3
   bias) and 0.5 x the per-hour, per-level residual quantile (3-hour
   smoothed), which repairs level-specific miscalibration the location
-  shift cannot see.
+  shift cannot see. Each of the two scale models gets its own
+  corrections, read off its own base forecast.
 
   Two bounded nudges use the case's own trajectory: the last pre-day
   hour's momentum (ln of hour 1 over the previous hour) shifts hours 2-3
@@ -79,7 +92,13 @@ SIGMA = 0.15
 
 # Kernel / readout constants, all fitted by the LOO harness (TESTS.md).
 BW_SIZE = 1.0
-WEIGHT_FLOOR = 0.005
+# v6: the size kernel's bandwidth is modulated by the unlock-class
+# relation between target and comparable - narrower (x0.7) for a
+# comparable of the target's own class, wider (x1.2) for a different
+# known class, unmodulated when either class is unknown.
+BW_CLASS_SAME = 0.7
+BW_CLASS_DIFF = 1.2
+WEIGHT_FLOOR = 0.002
 SCALE_K = 0.7
 REG_LAMBDA = 20.0
 REG_CLAMP = 1.25
@@ -88,15 +107,27 @@ RECAL_SHRINK = 0.5
 RECAL_MIN_POOL = 8
 TREND_K = 0.3
 MOMENTUM_CAP = 0.08
-# A forecast hour's log-ratio quantiles are kept inside this band.
+# v6: the readout averages two scale models of the same fit - a symmetric
+# one and an asymmetric one whose scale comes from the fit's signed
+# residuals (up-residuals for the upper quantiles, down-residuals for
+# the lower) - in equal parts, in log space.
+ASYM_BLEND = 0.5
+# A forecast hour's log-ratio quantiles are kept inside this band. The
+# upper edge was 3.5 through v5; the pool itself contains launches whose
+# true log-ratio reaches +7.7 (an hour-1 print hours before the unlock),
+# and the cap cost the full LOO set ~15% while never binding anywhere in
+# the target regime. 4.5 keeps insurance against a runaway extrapolation
+# (the 1e9 viewer cap still applies separately) without truncating
+# curves the pool genuinely forecasts.
 LR_CAP_LO = -3.0
-LR_CAP_HI = 3.5
+LR_CAP_HI = 4.5
 # GTA VI's Twitch category id; the rules fix its unlock as rolling local
 # midnight, so the class is known even if a case's notes omit it.
 GTA6_TWITCH_ID = "1867279146"
 # Regression features, in order: size, pre-day level, dip, rolling
-# indicator, and the size x rolling interaction.
-N_FEATURES = 5
+# indicator, the size x rolling interaction, and log viewers-per-channel
+# at hour 1 (v6).
+N_FEATURES = 6
 
 
 def round2(x):
@@ -208,7 +239,7 @@ def case_unlock_class(case):
     return "unknown"
 
 
-def raw_features(ln_v1, pre, dip, uclass):
+def raw_features(ln_v1, pre, dip, uclass, vpc=None):
     """The regression's raw feature row; None where a feature is unmeasured."""
     rolling = None
     if uclass == "rolling":
@@ -216,7 +247,7 @@ def raw_features(ln_v1, pre, dip, uclass):
     elif uclass != "unknown":
         rolling = 0.0
     size_x_rolling = ln_v1 * rolling if rolling is not None else None
-    return (ln_v1, pre, dip, rolling, size_x_rolling)
+    return (ln_v1, pre, dip, rolling, size_x_rolling, vpc)
 
 
 def comparable_curves(case):
@@ -239,23 +270,35 @@ def comparable_curves(case):
             continue
         pre, dip = launch_features(hours, day_start, v1)
         uclass = classify_unlock(comp.get("unlock"))
+        vpc = None
+        for row in comp.get("hourly") or []:
+            if parse_time(row.get("from")) == day_start and row.get("channels"):
+                vpc = math.log(v1 / float(row["channels"]))
+                break
         out.append({
             "curve": curve,
             "ln_v1": math.log(v1),
             "uclass": uclass,
-            "feats": raw_features(math.log(v1), pre, dip, uclass),
+            "feats": raw_features(math.log(v1), pre, dip, uclass, vpc),
             "trend": launch_trend(hours, day_start, v1),
         })
     return out
 
 
-def pool_weight(target_ln, comp):
+def pool_weight(target_ln, comp, target_class=None):
     """How much one comparable speaks for the target case: the size kernel.
 
-    v3/v4 multiplied this by an unlock-class factor; v5 does not - the
-    class enters through the regression's rolling features instead, and
-    the factor measurably hurt once it did (TESTS.md)."""
-    s = ((target_ln - comp["ln_v1"]) / BW_SIZE) ** 2
+    v3/v4 multiplied this by an unlock-class factor; v5 dropped that -
+    the class enters through the regression's rolling features instead,
+    and the factor measurably hurt once it did (TESTS.md). v6 brings the
+    class back into the weights in a different place: it modulates the
+    kernel's bandwidth (narrower for the target's own class, wider for
+    a different known class), which sharpens same-class matching without
+    the factor's hard down-weighting of everything else."""
+    bw = BW_SIZE
+    if target_class and target_class != "unknown" and comp["uclass"] != "unknown":
+        bw *= BW_CLASS_SAME if comp["uclass"] == target_class else BW_CLASS_DIFF
+    s = ((target_ln - comp["ln_v1"]) / bw) ** 2
     return WEIGHT_FLOOR + math.exp(-0.5 * s)
 
 
@@ -347,36 +390,62 @@ def _ridge_loc_sd(idxs, weights, pool, target_feats, h):
     xt = centered(target_feats)
     loc = ybar + sum(beta[k] * xt[k] for k in range(N_FEATURES))
     loc = ybar + max(-REG_CLAMP, min(REG_CLAMP, loc - ybar))
-    var = 0.0
+    var = vu = vd = 0.0
+    tu = td = 0.0
     for i in idxs:
         fit = ybar + sum(beta[k] * xs[i][k] for k in range(N_FEATURES))
-        var += weights[i] * (pool[i]["curve"][h] - fit) ** 2
+        r = pool[i]["curve"][h] - fit
+        var += weights[i] * r * r
+        if r >= 0:
+            vu += weights[i] * r * r
+            tu += weights[i]
+        else:
+            vd += weights[i] * r * r
+            td += weights[i]
     var /= tot
     dof = max(1.0, len(idxs) - N_FEATURES - 1)
-    var *= len(idxs) / dof
-    return loc, math.sqrt(var)
+    adj = len(idxs) / dof
+    var *= adj
+    sd = math.sqrt(var)
+    # Split scales for the asymmetric readout (v6): the dispersion of the
+    # fit's upward residuals alone, and of its downward residuals alone,
+    # each normalised so a symmetric residual sample reproduces sd.
+    sd_up = math.sqrt(vu / tot * adj * 2) if tu > 0 else sd
+    sd_dn = math.sqrt(vd / tot * adj * 2) if td > 0 else sd
+    return loc, sd, sd_up, sd_dn
 
 
 def _loc_scale(target_feats, pool, idxs, weights):
-    """Per-hour (location, scale) dicts for a target over a pool subset."""
-    locs, sds = {}, {}
+    """Per-hour (location, scale, scale-up, scale-down) dicts for a target."""
+    locs, sds, ups, dns = {}, {}, {}, {}
     for h in range(2, 25):
         have = [i for i in idxs if h in pool[i]["curve"]]
         if not have:
             continue
         stats = _ridge_loc_sd(have, weights, pool, target_feats, h)
         if stats is not None:
-            locs[h], sds[h] = stats
-    return locs, sds
+            locs[h], sds[h], ups[h], dns[h] = stats
+    return locs, sds, ups, dns
 
 
-def _base_quantiles(target_feats, pool, idxs, weights):
-    """{hour: [log quantiles]} before recalibration corrections."""
-    locs, sds = _loc_scale(target_feats, pool, idxs, weights)
-    return {h: [locs[h] + z * SCALE_K * sds[h] for z in Z] for h in locs}
+def _base_quantiles(target_feats, pool, idxs, weights, asym=False):
+    """{hour: [log quantiles]} before recalibration corrections.
+
+    With asym=True the upper quantiles are spread by the fit's upward
+    residual scale and the lower ones by its downward scale; the v6
+    readout averages this with the symmetric version (ASYM_BLEND)."""
+    locs, sds, ups, dns = _loc_scale(target_feats, pool, idxs, weights)
+    out = {}
+    for h in locs:
+        if asym:
+            out[h] = [locs[h] + z * SCALE_K * (ups[h] if z > 0 else dns[h] if z < 0 else sds[h])
+                      for z in Z]
+        else:
+            out[h] = [locs[h] + z * SCALE_K * sds[h] for z in Z]
+    return out
 
 
-def _corrections(pool, W):
+def _corrections(pool, W, asym=False):
     """Self-LOO recalibration corrections {hour: [corr per level]}.
 
     Two parts, both read off the pool forecasting itself leave-one-out:
@@ -384,6 +453,8 @@ def _corrections(pool, W):
     the fitted location) and a per-level term (0.5 x smoothed per-hour
     residual quantile against the full base forecast), which repairs
     level-specific miscalibration. Skipped for pools under RECAL_MIN_POOL.
+    The v6 readout computes the corrections separately against each of
+    its two base forecasts (symmetric and asymmetric scale).
     """
     corr = {h: [0.0] * 5 for h in range(2, 25)}
     n = len(pool)
@@ -395,8 +466,8 @@ def _corrections(pool, W):
     for j, member in enumerate(pool):
         others = [i for i in all_idx if i != j]
         wrow = {i: W[j][i] for i in others}
-        locs, _ = _loc_scale(member["feats"], pool, others, wrow)
-        fq = _base_quantiles(member["feats"], pool, others, wrow)
+        locs, _, _, _ = _loc_scale(member["feats"], pool, others, wrow)
+        fq = _base_quantiles(member["feats"], pool, others, wrow, asym)
         for h, lr in member["curve"].items():
             if h in locs:
                 res_loc[h].append(lr - locs[h])
@@ -448,6 +519,17 @@ def hour1_momentum(case, day_start):
     return max(-MOMENTUM_CAP, min(MOMENTUM_CAP, nudge))
 
 
+def hour1_channels(case):
+    """Streaming-channel count at hour 1 from the case's known print."""
+    known = case.get("known") or []
+    if isinstance(known, dict):
+        known = [known]
+    for row in known:
+        if row.get("hour") == 1 and row.get("channels"):
+            return float(row["channels"])
+    return None
+
+
 def hour1_print(case):
     known = case.get("known") or []
     if isinstance(known, dict):
@@ -479,19 +561,33 @@ def forecast_case(case):
         hours = case_hourly(case)
         tpre, tdip = launch_features(hours, day_start, p1)
         ttrend = launch_trend(hours, day_start, p1)
-    target_feats = raw_features(target_ln, tpre, tdip, target_class)
+    tvpc = None
+    chans = hour1_channels(case)
+    if chans:
+        tvpc = math.log(p1 / chans)
+    target_feats = raw_features(target_ln, tpre, tdip, target_class, tvpc)
     momentum = hour1_momentum(case, day_start)
 
     base = {}
     corr = {h: [0.0] * 5 for h in range(2, 25)}
     if pool:
         idxs = list(range(len(pool)))
-        weights = {i: pool_weight(target_ln, pool[i]) for i in idxs}
-        base = _base_quantiles(target_feats, pool, idxs, weights)
+        weights = {i: pool_weight(target_ln, pool[i], target_class) for i in idxs}
+        # v6 readout: the symmetric and asymmetric scale models of the
+        # same fit, averaged in log space (ASYM_BLEND), each with its
+        # own self-LOO corrections - algebraically the average of the
+        # two readouts' log quantiles.
+        base_sym = _base_quantiles(target_feats, pool, idxs, weights)
+        base_asym = _base_quantiles(target_feats, pool, idxs, weights, asym=True)
+        base = {h: [(1 - ASYM_BLEND) * base_sym[h][t] + ASYM_BLEND * base_asym[h][t]
+                    for t in range(5)] for h in base_sym}
         if len(pool) >= RECAL_MIN_POOL:
-            W = [[pool_weight(pool[j]["ln_v1"], pool[i])
+            W = [[pool_weight(pool[j]["ln_v1"], pool[i], pool[j]["uclass"])
                   for i in idxs] for j in idxs]
-            corr = _corrections(pool, W)
+            corr_sym = _corrections(pool, W)
+            corr_asym = _corrections(pool, W, asym=True)
+            corr = {h: [(1 - ASYM_BLEND) * corr_sym[h][t] + ASYM_BLEND * corr_asym[h][t]
+                        for t in range(5)] for h in corr}
 
     rows = []
     for h in hours_wanted:
