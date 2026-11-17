@@ -46,11 +46,21 @@ def synthetic_case(comp, pool):
     day_start = entry.parse_time(comp["day_start"])
     hours = entry.hour_map(comp.get("hourly"))
     v1 = hours[day_start]
+    chans = {}
+    for row in comp.get("hourly") or []:
+        at = entry.parse_time(row.get("from"))
+        if at is not None and row.get("channels"):
+            chans[at] = row["channels"]
     return {
         "id": "loo",
+        "game": {"name": comp.get("name")},
+        # Real cases carry the launch's unlock description in their notes;
+        # pass the comparable's own unlock note so the v3 class path runs
+        # exactly as it will on a real case.
+        "notes": comp.get("unlock") or "",
         "day_start": comp["day_start"],
         "levels": LEVELS,
-        "known": [{"hour": 1, "viewers": v1}],
+        "known": [{"hour": 1, "viewers": v1, "channels": chans.get(day_start)}],
         "forecast": [{"hour": h} for h in range(2, 25)],
         "history": [],
         "history_hourly": [
